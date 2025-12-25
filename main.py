@@ -3,107 +3,134 @@ from numpy import linalg as LA
 from PIL import Image
 import os
 import matplotlib.pyplot as plt
+import time
 
-if not os.path.exists("./img/"):
-    os.makedirs("./img/")
-    print("Auto create ./img/ file，put the image inside it")
+def preprocess_channel(channel):
+    mean = np.mean(channel, axis=0)
+    centered_data = channel - mean
+    return centered_data, mean
 
-#Just for showing SVD calc in python
-def SVD(A):
-    A=np.mat(A)
-    m,n=np.shape(A)
-    if n>m:
-        A=A.T
-    ATA=A.T.dot(A)
-    sigma_nn,V=LA.eig(ATA)
-    sigmaNegative=np.array((sigma_nn<0.0).nonzero())[0]
-    sigma_nn[sigmaNegative]*=-1
-    V[sigmaNegative]*=-1
-    sortedSigma__nnIndex=np.argsort(sigma_nn)[::-1]
-    sigma_nn=sigma_nn[sortedSigma__nnIndex]
-    V=V[:,sortedSigma__nnIndex]
-    Sigma=np.mat(np.diag(sigma_nn))*10
-    U=A.dot(V).dot(Sigma.I)
+def pca_svd_method(A_centered):
+    start_time = time.time()
 
-    return U,np.array(np.diag(Sigma)),V.T
+    U, Sigma, VT = np.linalg.svd(A_centered, full_matrices=False)
 
-def svWeight(Sigma,threshold):
-    for k in range(len(Sigma)):
-        if np.sum(Sigma[:k])/np.sum(Sigma) >= threshold:
-            return k
+    execution_time = time.time() - start_time
+    return U, Sigma, VT, execution_time
 
-def imgCompress(img,threshold):
-    U,Sigma,VT=LA.svd(img)
-    k=svWeight(Sigma,threshold)
-    reChannel=U[:,:k].dot(np.diag(Sigma[:k])).dot(VT[:k,:])
-    Sigma=np.diag(Sigma)
 
-    reChannel[reChannel<0]=0
-    reChannel[reChannel>255]=255
-    return np.rint(reChannel).astype('uint8')
+def pca_eigen_method(A_centered):
+    start_time = time.time()
 
-def imgRebuild(filepath,filename,threshold):
-    img=Image.open(filepath+filename,'r')
-    A=np.array(img)
-    R0=A[:,:,0]
-    G0=A[:,:,1]
-    B0=A[:,:,2]
-    m,n=np.shape(R0)
-    if n>m:
-        R=imgCompress(R0.T,threshold)
-        G=imgCompress(G0.T,threshold)
-        B=imgCompress(B0.T,threshold)
+    cov_matrix = np.cov(A_centered, rowvar=False)
+
+    eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+
+    idx = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[idx]
+    eigenvectors = eigenvectors[:, idx]
+
+    execution_time = time.time() - start_time
+    return eigenvalues, eigenvectors, execution_time
+
+
+def find_k_for_95_variance(singular_values_or_eigenvalues, is_singular=True):
+
+    if is_singular:
+        variance = singular_values_or_eigenvalues ** 2
     else:
-        R=imgCompress(R0, threshold)
-        G=imgCompress(G0, threshold)
-        B=imgCompress(B0, threshold)
-    newImg=np.stack((R,G,B),axis=2)
-    name=filename.split('.')[0]
-    newFile=f"{name}_{threshold*100}%.jpg"
-    Image.fromarray(newImg).save(filepath+newFile)
-    img=Image.open(filepath+newFile)
-    img.show()
+        variance = singular_values_or_eigenvalues
 
-def show_compression_grid(filepath, filename, threshold_list):
+    total_variance = np.sum(variance)
+    cumulative_variance = np.cumsum(variance) / total_variance
 
-    img = Image.open(filepath + filename).convert('RGB')
-    A = np.array(img)
+    k = np.argmax(cumulative_variance >= 0.95) + 1
+    return k, cumulative_variance
 
-    channels_svd = []
+
+def compress_image_comparison(image_path):
+
+    img = Image.open(image_path).convert('RGB')
+    original_data = np.array(img, dtype=float)
+    h, w, c = original_data.shape
+    print(f"Original Image: {w}x{h}, File Size: {os.path.getsize(image_path) / 1024:.2f} KB")
+
+
+    reconstructed_svd = np.zeros_like(original_data)
+    reconstructed_eigen = np.zeros_like(original_data)
+
+    svd_total_time = 0
+    eigen_total_time = 0
+    k_95 = 0
+
     for i in range(3):
-        U, sigma, VT = LA.svd(A[:, :, i])
-        channels_svd.append((U, sigma, VT))
+        channel = original_data[:, :, i]
 
-    fig, axes = plt.subplots(3, 3, figsize=(15, 15))
-    axes = axes.flatten()
+        centered_channel, mean = preprocess_channel(channel)
 
-    plt.suptitle(f"SVD Compression Comparison: {filename}\n\n", fontsize=20)
+        U, Sigma, VT, t_svd = pca_svd_method(centered_channel)
+        svd_total_time += t_svd
 
-    for i, threshold in enumerate(threshold_list):
-        reconstructed_channels = []
+        eigenvals, eigenvecs, t_eigen = pca_eigen_method(centered_channel)
+        eigen_total_time += t_eigen
 
-        for U, sigma, VT in channels_svd:
+        k, _ = find_k_for_95_variance(Sigma, is_singular=True)
+        k_95 = max(k_95, k)
 
-            k = svWeight(sigma, threshold)
-            re_channel = U[:, :k] @ np.diag(sigma[:k]) @ VT[:k, :]
+        re_svd = U[:, :k] @ np.diag(Sigma[:k]) @ VT[:k, :]
+        reconstructed_svd[:, :, i] = re_svd + mean
 
+        V_k = eigenvecs[:, :k]
+        re_eigen = (centered_channel @ V_k) @ V_k.T
+        reconstructed_eigen[:, :, i] = re_eigen + mean
 
-            re_channel = np.clip(re_channel, 0, 255).astype('uint8')
-            reconstructed_channels.append(re_channel)
+    reconstructed_svd = np.clip(reconstructed_svd, 0, 255).astype('uint8')
+    reconstructed_eigen = np.clip(reconstructed_eigen, 0, 255).astype('uint8')
 
+    print("-" * 30)
+    print(f"Performance Comparison (k={k_95} for 95% variance):")
+    print(f"Total SVD Time: {svd_total_time:.4f}s")
+    print(f"Total Eigen Time: {eigen_total_time:.4f}s")
+    print(f"Efficiency Winner: {'SVD' if svd_total_time < eigen_total_time else 'Eigen Decomposition'}")
+    print("-" * 30)
 
-        full_img = np.stack(reconstructed_channels, axis=2)
+    fig, axes = plt.subplots(1, 3, figsize=(20, 8))
 
-        axes[i].imshow(full_img)
-        axes[i].set_title(f"Threshold: {threshold * 100}% (k={k})")
-        axes[i].axis('off')
-    plt.tight_layout()
+    axes[0].imshow(original_data.astype('uint8'))
+    axes[0].set_title(f"Original Image\n({w}x{h})", fontsize=14, fontweight='bold')
+    axes[0].axis('off')
+
+    #SVD
+    axes[1].imshow(reconstructed_svd)
+    axes[1].set_title(f"SVD Method\nk={k_95} (95% Var)", fontsize=14, fontweight='bold')
+    axes[1].set_xlabel(f"Time: {svd_total_time:.4f}s", fontsize=12)
+    axes[1].axis('off')
+
+    #Eigen
+    axes[2].imshow(reconstructed_eigen)
+    axes[2].set_title(f"Eigen Method\nk={k_95} (95% Var)", fontsize=14, fontweight='bold')
+    axes[2].set_xlabel(f"Time: {eigen_total_time:.4f}s", fontsize=12)
+    axes[2].axis('off')
+
+    winner = 'SVD' if svd_total_time < eigen_total_time else 'Eigen Decomposition'
+    summary_text = (
+        f"PCA Image Compression Analysis\n"
+        f"--------------------------------------------------\n"
+        f"Target Variance Retention: 95%  |  Optimal k: {k_95}\n"
+        f"SVD Execution Time: {svd_total_time:.4f}s\n"
+        f"Eigen Execution Time: {eigen_total_time:.4f}s\n"
+        f"Efficiency Winner: {winner}"
+    )
+
+    plt.figtext(0.5, 0.02, summary_text, ha="center", fontsize=12,
+                bbox={"facecolor": "orange", "alpha": 0.1, "pad": 10}, fontfamily='monospace')
+
+    plt.tight_layout(rect=[0, 0.1, 1, 0.95])
+    plt.suptitle(f"Matrix Decomposition Comparison: {filename}", fontsize=18, y=0.98)
     plt.show()
 
 try:
-    filename='KoalaBear.jpg' #put your image filename
-    thresholdList=[0.01,0.05,0.1,0.3,0.5,0.6,0.7,0.8,0.9] #how many % you want to compress
-    show_compression_grid("./img/", filename, thresholdList)
+    filename='KoalaBear.jpg'
+    compress_image_comparison(filename)
 except KeyboardInterrupt:
-    print("Exit Succesfully!")
-
+    print("Session Terminated Successfully")
