@@ -49,20 +49,15 @@ def find_k_for_95_variance(singular_values_or_eigenvalues, is_singular=True):
 
 
 def compress_image_comparison(image_path):
-
     img = Image.open(image_path).convert('RGB')
     original_data = np.array(img, dtype=float)
     h, w, c = original_data.shape
     print(f"Original Image: {w}x{h}, File Size: {os.path.getsize(image_path) / 1024:.2f} KB")
-
-
     reconstructed_svd = np.zeros_like(original_data)
     reconstructed_eigen = np.zeros_like(original_data)
-
     svd_total_time = 0
     eigen_total_time = 0
     k_95 = 0
-
     for i in range(3):
         channel = original_data[:, :, i]
 
@@ -130,7 +125,7 @@ def compress_image_comparison(image_path):
     plt.show()
 
 try:
-    filename='KoalaBear.jpg'
+    filename='tokyo.jpeg'
     compress_image_comparison(filename)
 except KeyboardInterrupt:
     print("Session Terminated Successfully")
