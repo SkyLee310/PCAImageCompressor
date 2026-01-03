@@ -82,6 +82,20 @@ def compress_image_comparison(image_path):
     reconstructed_svd = np.clip(reconstructed_svd, 0, 255).astype('uint8')
     reconstructed_eigen = np.clip(reconstructed_eigen, 0, 255).astype('uint8')
 
+    svd_image_obj = Image.fromarray(reconstructed_svd)
+    eigen_image_obj = Image.fromarray(reconstructed_eigen)
+
+    # Save the images (using the filename base + method + k value)
+    base_name = os.path.splitext(os.path.basename(image_path))[0]
+    svd_filename = f"{base_name}_svd_k{k_95}.jpg"
+    eigen_filename = f"{base_name}_eigen_k{k_95}.jpg"
+
+    svd_image_obj.save(svd_filename)
+    eigen_image_obj.save(eigen_filename)
+
+    print(f"SUCCESS: Saved {svd_filename}")
+    print(f"SUCCESS: Saved {eigen_filename}")
+
     print("-" * 30)
     print(f"Performance Comparison (k={k_95} for 95% variance):")
     print(f"Total SVD Time: {svd_total_time:.4f}s")
